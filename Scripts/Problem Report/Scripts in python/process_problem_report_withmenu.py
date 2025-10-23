@@ -11,9 +11,20 @@ import subprocess
 from datetime import datetime
 import time
 
+def setup_output_folder(root_folder):
+    """
+    Ensures the 'Process output' subfolder exists in the root folder.
+    Returns the full path to this folder.
+    """
+    output_folder = os.path.join(root_folder, "Process output")
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+        log_message(f"Created output folder: {output_folder}")
+    return output_folder
+    
 def log_message(message):
     """
-    Logs a message with a timestamp. Appends it to 'process_log_output.csv'
+    Logs a message with a timestamp. Appends it to 'Process output/process_log_output.csv'
     while ensuring compatibility with regional settings and UTF-8 encoding.
     If the file is locked (e.g., opened by Excel), it skips writing the message
     and continues without recursion.
@@ -22,8 +33,9 @@ def log_message(message):
     log_entry = f"[{timestamp}] {message}"
     print(log_entry)  # Print to console
 
-    # Ensure we write using UTF-8 with BOM and use the correct delimiter
-    file_path = "process_log_output.csv"
+    # Set CSV log path in the "Process output" folder
+    output_folder = setup_output_folder(os.getcwd())
+    file_path = os.path.join(output_folder, "process_log_output.csv")
     file_exists = os.path.exists(file_path)
 
     max_retries = 3  # Number of retries if the file is locked
@@ -34,7 +46,7 @@ def log_message(message):
             with open(file_path, mode="a", newline="", encoding="utf-8-sig") as log_file:
                 log_writer = csv.writer(log_file, delimiter=';')  # Use `;` as delimiter for Excel compatibility
                 if not file_exists:
-                    # Add the header if the file is new (only when creating the file)
+                    # Add the header if the file is new
                     log_writer.writerow(["Date", "Message"])
                     file_exists = True  # Set it to True after the header is written
                 log_writer.writerow([timestamp, message])
@@ -42,14 +54,12 @@ def log_message(message):
 
         except PermissionError:
             if attempt + 1 < max_retries:
-                print(f"Could not write to '{file_path}' after attemp: {attempt + 1}, waiting... (File may be open in another program).")
+                print(f"Could not write to '{file_path}' after attempt {attempt + 1}, waiting... (File may be open in another program).")
                 time.sleep(retry_delay)  # Wait before retrying
             else:
-                # If retries fail, print a warning message (only to console)
                 print(f"Could not write to '{file_path}' after {max_retries} retries. File may be open in another program.")
                 break
         except Exception as e:
-            # Handle unexpected errors and print the issue to the console
             print(f"An unexpected error occurred while trying to log to '{file_path}': {str(e)}")
             break
             
@@ -174,20 +184,21 @@ def extract_settings(root_folder):
 
 def extract_ic_log(root_folder):
     """
-    Extracts the IC log:
-    1. Unzips the IC log zip file located in the 'EventTraces/IC/log' folder.
+    Extracts the IC log into the 'Process output/' directory.
     """
     log_message("Starting process to extract IC logs.")
+    output_folder = setup_output_folder(root_folder)
 
-    # STEP 7: Unzip the IC Log (IC logs are situated in a specific folder path)
     ic_logs_file_path = os.path.join(root_folder, "EventTraces/IC/log/log.zip")
     log_message(f"Looking for IC log zip file at: {ic_logs_file_path}")
 
-    # Check if the IC log zip file exists
+    # Check if the IC log exists
     if os.path.exists(ic_logs_file_path):
         log_message(f"Found IC log zip file: {ic_logs_file_path}")
-        unzip_file(ic_logs_file_path, "")  # No password required for IC logs
-        log_message("Unzipping IC logs completed.")
+        unzip_file(ic_logs_file_path, "")
+        csv_summary_path = os.path.join(output_folder, "IC_Log_Summary.csv")
+        # Perform IC log specific processing and save CSV to `output_folder`
+        log_message(f"Unzipping IC logs completed. Summary saved at: {csv_summary_path}")
     else:
         log_message("No IC log zip file found. Skipping extraction.")
 
@@ -332,9 +343,14 @@ def save_xml_with_utf8_encoding(file_path):
 
 
 def create_list_of_files(startpath):
+    """
+    Creates a summary of all files and folders in the directory into 'Process output/problemreport_files.csv'.
+    """
     log_message(f"Creating a list of files in directory: {startpath}")
-    file_path = "problemreport_files.csv"
-    with open(file_path, "w", newline="") as csvfile:
+    output_folder = setup_output_folder(startpath)
+    file_path = os.path.join(output_folder, "problemreport_files.csv")
+
+    with open(file_path, "w", newline="", encoding="utf-8") as csvfile:
         filewriter = csv.writer(csvfile, delimiter=";", quotechar="|", quoting=csv.QUOTE_MINIMAL)
         filewriter.writerow(["Name", "Type", "Path"])
         for root, dirs, files in os.walk(startpath):
@@ -347,21 +363,24 @@ def create_list_of_files(startpath):
 def extract_pipetting_steps(root_folder):
     """
     Executes the PipettorDataExtractorConsole.exe located in PipettorDataExtractor_Tool subfolder 
-    with configured parameters. Extracts pipetting steps into a CSV file.
+    with configured parameters. Extracts pipetting steps into a CSV file in the 'Process output' folder.
     """
     log_message("Starting pipetting steps extraction process...")
 
     # Update the path to the executable in the subfolder PipettorDataExtractor_Tool
     exe_path = os.path.join(root_folder, "PipettorDataExtractor_Tool", "PipettorDataExtractorConsole.exe")
-    csv_file_path = os.path.join(root_folder, "testorders_pipetting_events.csv")
+
+    # Ensure the "Process output" folder exists and define CSV output path there
+    output_folder = setup_output_folder(root_folder)  # Create/confirm "Process output"
+    csv_file_path = os.path.join(output_folder, "testorders_pipetting_events.csv")
     input_path = os.path.abspath(root_folder)  # Get absolute path for input folder
 
     # Construct the command as a LIST of arguments for subprocess.run
     command_list = [
         exe_path,
         "-p",
-        input_path,        # Input folder
-        csv_file_path,     # Output CSV file
+        input_path,        # Input folder path
+        csv_file_path,     # Output CSV file path in 'Process output'
         "true",            # Overwrite existing file flag
         "true",            # Extract all data flag
         "false"            # Additional flag
@@ -394,11 +413,9 @@ def extract_pipetting_steps(root_folder):
         log_message(f"An unexpected error occurred while executing command {command_list}: {str(e)}")
 
 
-
-
 def analyze_ebarcodes_importer(root_folder):
     """
-    Analyzes e-Barcodes Importer logs from backend log parts and generates a CSV summary.
+    Analyzes e-Barcodes Importer logs from backend log parts and generates a CSV summary in 'Process output/'.
     """
     log_message("Starting e-Barcodes importer analysis...")
 
@@ -406,21 +423,18 @@ def analyze_ebarcodes_importer(root_folder):
     relative_path = r"EventTraces\SystemSoftwareLog"
     log_dir = os.path.join(root_folder, relative_path)
 
-    # Output file name
-    csv_summary_file = os.path.join(root_folder, "eBarcode Importer Summary.csv")
+    # Create output folder inside "Process output"
+    output_folder = setup_output_folder(root_folder)
+    csv_summary_file = os.path.join(output_folder, "eBarcode_Importer_Summary.csv")
 
-    # Ensure the directory exists
+    # Ensure the log directory exists
     if not os.path.exists(log_dir):
         log_message(f"Error: Directory not found: {log_dir}")
         return
 
     log_message(f"Processing e-Barcodes logs from directory: {log_dir}")
-
-    # Trace summary storage
     log_count = 0
-
-    # Define the logger to exclude
-    excluded_logger = ""  # Disabled exclusion for logger, as it’s commented in the original script
+    processed_rows = []
 
     def sanitize_version(version):
         """Ensure the version field contains only digits and periods (e.g., '8.2.101')."""
@@ -448,17 +462,16 @@ def analyze_ebarcodes_importer(root_folder):
     def extract_install_events(files):
         """Extract all lines with InstallProgressChangedEvent from all given files."""
         install_events = []
-        for file_name in files:            
+        for file_name in files:
             file_path = os.path.join(log_dir, file_name)
             log_message(f"Processing install events: {file_name}")
             try:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as file:
-                    for line in file:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
                         if "InstallProgressChangedEvent" in line:
-                            log_message(f"InstallProgressChangedEvent fond in file {file_name} and line {line}")
-                            install_events.append({"event": line.strip(), "file_name": file_name})  # Add matching lines to the list
+                            install_events.append({"event": line.strip(), "file_name": file_name})
             except Exception as e:
-                log_message(f"DEBUG: Error extracting install events from file {file_path}: {e}")
+                log_message(f"Error extracting install events from '{file_path}': {e}")
         return install_events
 
     def find_install_event(version, code, auxiliary_events):
@@ -468,34 +481,30 @@ def analyze_ebarcodes_importer(root_folder):
                 return event["event"]  # Return the matched installation event
         return None
 
-    # Step 1: Extract installation events from files
-    log_message("Extracting installation events from log files...")
+    # Discover log files
     try:
         log_files = sorted(
             (
-                f
-                for f in os.listdir(log_dir)
-                if f.startswith("Roche.C4C.ServiceHosting.BackEnd.log")
+                f for f in os.listdir(log_dir) if f.startswith("Roche.C4C.ServiceHosting.BackEnd.log")
             ),
             key=lambda f: os.path.getctime(os.path.join(log_dir, f)),
             reverse=True,
         )
-        auxiliary_events = extract_install_events(log_files)
     except Exception as e:
-        log_message(f"Error while processing the logs: {e}")
+        log_message(f"Error while fetching log files: {e}")
         return
 
-    # Step 2: Process log files and generate eBarcode Importer Summary
-    processed_rows = []
+    # Step 1: Extract auxiliary events
+    auxiliary_events = extract_install_events(log_files)
 
+    # Step 2: Analyze log files and prepare rows for CSV
     for file_name in log_files:
         file_path = os.path.join(log_dir, file_name)
-        log_message(f"Processing: {file_name}")
 
         try:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as file:
-                for line_number, line in enumerate(file, start=1):
-                    # Split the line manually using the delimiter `<!>`
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as log_file:
+                for line_number, line in enumerate(log_file, start=1):
+                    # Use delimiter `<!>` for splitting lines
                     parts = line.split("<!>")
                     if len(parts) < 7:  # Skip incomplete lines
                         continue
@@ -504,103 +513,97 @@ def analyze_ebarcodes_importer(root_folder):
                     logger = parts[3].strip()
                     message = parts[4].strip()
 
-                    # Skip the specified logger
-                    if logger == excluded_logger:
+                    # Skip irrelevant loggers
+                    if logger == "":
                         continue
 
                     if "Roche.C4C.RSA.BusinessLogic.PackageManagement.PackageImporting" in logger:
-                        # Extract MasterFileCategory, Version, and Code from the message
                         master_file_category, version, code = extract_message_details(message)
-
-                        # Search for an installation event in the auxiliary data
                         install_event = None
                         if version and code:
                             install_event = find_install_event(version, code, auxiliary_events)
 
-                        # Append the row information for CSV output in the specified order
+                        # Append the row information for CSV output
                         processed_rows.append([
                             timestamp,
                             master_file_category,
                             version,
                             code,
                             message,
-                            install_event if install_event else "",
+                            install_event or "",
                         ])
                         log_count += 1
         except Exception as e:
-            log_message(f"Error processing file {file_name}: {e}")
+            log_message(f"Error processing log file '{file_name}': {e}")
 
-    if log_count == 0:
-        log_message("No relevant logs processed.")
-    else:
-        log_message(f"Finished processing files. Total relevant logs: {log_count}")
-
-    # Write to CSV file
+    # Write the final CSV file
     try:
         with open(csv_summary_file, "w", encoding="utf-8", newline="") as csv_file:
             writer = csv.writer(csv_file, delimiter=";")
-            # Write the header in the specified order
             writer.writerow(["Timestamp", "MasterFileCategory", "Version", "Code", "Message", "Installation Event"])
-            # Write all processed rows
-            for row in processed_rows:
-                writer.writerow(row)
-
-        log_message(f"Final summary saved to: {csv_summary_file}")
+            writer.writerows(processed_rows)
+        log_message(f"e-Barcodes Importer Summary saved to: {csv_summary_file}")
     except Exception as e:
-        log_message(f"Error writing to {csv_summary_file}: {e}")
+        log_message(f"Failed to write summary to '{csv_summary_file}': {e}")
 
+    log_message("e-Barcodes importer analysis completed.")
 
 def main():
     root_folder = os.getcwd()  # Automatically detect the current working directory.
     while True:
-        # Display the menu
+        # Display the menu in the specified order
         print("\nMain Menu:")
-        print("[1] Extract problem report")
-        print("[2] Split files in smaller parts")
-        print("[3] Extract audits")
-        print("[4] Extract settings")
-        print("[5] Extract IC log")
-        print("[6] List files")
-        print("[7] Run all in one [1]/[3]/[4]/[6]")
-        print("[8] Extract pipetting steps")
-        print("[9] Analyze e-Barcodes importer")  # Newly added Option [9]
+        print("[1] Extract all in one: [2]/[3]/[4]/[5]")
+        print("    [2] Extract problem report")        
+        print("    [3] Extract audits")
+        print("    [4] Extract settings")			
+        print("    [5] List files")
+        print("[6] Extract IC log")        
+        print("[7] Extract pipetting steps")
+        print("[8] Analyze e-Barcodes importer")
+        print("[9] Split files in smaller parts")
         print("[Q] Quit")
 
         # Wait for user input
         option = input("\nSelect the option: ").strip().lower()
 
         if option == "1":
-            extract_problem_report(root_folder)
-        elif option == "2":
-            split_log_files_in_parts(root_folder)
-        elif option == "3":
-            extract_audits(root_folder)
-        elif option == "4":
-            extract_settings(root_folder)
-        elif option == "5":
-            extract_ic_log(root_folder)
-        elif option == "6":
-            create_list_of_files(root_folder)
-        elif option == "7":
-            print("\nRunning all options [1]/[3]/[4]/[6]...")
-            extract_problem_report(root_folder)  # Option [1]
+            print("\nRunning all options [2]/[3]/[4]/[5]...")
+            extract_problem_report(root_folder)  # Option [2]
             extract_audits(root_folder)          # Option [3]
+            extract_settings(root_folder)       # Option [4]
+            create_list_of_files(root_folder)   # Option [5]
+            print("\nAll selected options [2]/[3]/[4]/[5] completed.")
+        elif option == "2":
+            extract_problem_report(root_folder)  # Option [2]
+        elif option == "3":
+            extract_audits(root_folder)          # Option [3]
+        elif option == "4":
             extract_settings(root_folder)        # Option [4]
-            create_list_of_files(root_folder)    # Option [6]
-            print("\nAll selected options [1]/[3]/[4]/[6] completed.")
-        elif option == "8":
+        elif option == "5":
+            create_list_of_files(root_folder)    # Option [5]
+        elif option == "6":
+            print("\nExtracting IC logs...")
+            extract_ic_log(root_folder)
+            print("\nIC log extraction process completed.")
+        elif option == "7":
             print("\nExtracting pipetting steps...")
             extract_pipetting_steps(root_folder)
             print("\nPipetting steps extraction completed.")
-        elif option == "9":
+        elif option == "8":
             print("\nAnalyzing e-Barcodes importer...")
-            analyze_ebarcodes_importer(root_folder)  # Call the new method
+            analyze_ebarcodes_importer(root_folder)  # Newly added Option
             print("\ne-Barcodes importer analysis completed.")
+        elif option == "9":
+            print("\nSplitting files into smaller parts...")
+            split_log_files_in_parts(root_folder)
+            print("\nFile splitting completed.")
         elif option == "q":
             print("Exiting the program...")
             break
         else:
             print("Invalid option. Please try again.")
+
 
 
 if __name__ == "__main__":
