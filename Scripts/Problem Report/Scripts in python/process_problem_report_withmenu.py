@@ -11,56 +11,65 @@ import subprocess
 from datetime import datetime
 import time
 
+# Global variable for the output folder name
+OUTPUT_FOLDER_NAME = "Process output"  # Base folder where all output CSV files will be stored
+
+# Global variables for all output CSV file names
+PROCESS_LOG_FILE            = "process_log_output.csv"          # CSV that holds all log messages
+PROBLEM_REPORT_FILE         = "problemreport_files.csv"         # CSV listing all files in the problem report directory
+PIPETTING_EVENTS_FILE       = "testorders_pipetting_events.csv" # CSV storing extracted pipetting events
+EBARCODE_SUMMARY_FILE       = "eBarcode_Importer_Summary.csv"   # CSV summarizing e-Barcodes importer analysis
+IC_LOG_SUMMARY_FILE         = "IC_Log_Summary.csv"              # CSV summarizing IC log extraction
+
 def setup_output_folder(root_folder):
     """
-    Ensures the 'Process output' subfolder exists in the root folder.
+    Ensures the output folder exists in the root folder.
     Returns the full path to this folder.
     """
-    output_folder = os.path.join(root_folder, "Process output")
+    output_folder = os.path.join(root_folder, OUTPUT_FOLDER_NAME)
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
         log_message(f"Created output folder: {output_folder}")
     return output_folder
     
+
 def log_message(message):
     """
-    Logs a message with a timestamp. Appends it to 'Process output/process_log_output.csv'
-    while ensuring compatibility with regional settings and UTF-8 encoding.
-    If the file is locked (e.g., opened by Excel), it skips writing the message
-    and continues without recursion.
+    Logs a message with a timestamp. Appends it to the log CSV file in the output folder.
+    Skips writing if the file is locked (e.g., the log file is open in Excel).
     """
+    # Common variables
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_entry = f"[{timestamp}] {message}"
     print(log_entry)  # Print to console
 
-    # Set CSV log path in the "Process output" folder
+    # Path of the global log file
     output_folder = setup_output_folder(os.getcwd())
-    file_path = os.path.join(output_folder, "process_log_output.csv")
+    file_path = os.path.join(output_folder, PROCESS_LOG_FILE)
     file_exists = os.path.exists(file_path)
 
-    max_retries = 3  # Number of retries if the file is locked
+    max_retries = 3  # Number of retries in case of file lock
     retry_delay = 10  # Delay in seconds between retries
 
     for attempt in range(max_retries):
         try:
             with open(file_path, mode="a", newline="", encoding="utf-8-sig") as log_file:
-                log_writer = csv.writer(log_file, delimiter=';')  # Use `;` as delimiter for Excel compatibility
+                log_writer = csv.writer(log_file, delimiter=';')  # Use `;` for Excel compatibility
                 if not file_exists:
-                    # Add the header if the file is new
-                    log_writer.writerow(["Date", "Message"])
-                    file_exists = True  # Set it to True after the header is written
+                    log_writer.writerow(["Date", "Message"])  # Add header if it's a new file
+                    file_exists = True
                 log_writer.writerow([timestamp, message])
-            break  # Successfully wrote to the file, exit the retry loop
-
+            break  # Exit loop if successful
         except PermissionError:
+            # Retry writing if the file is locked
             if attempt + 1 < max_retries:
-                print(f"Could not write to '{file_path}' after attempt {attempt + 1}, waiting... (File may be open in another program).")
+                print(f"Could not write to '{file_path}' after attempt {attempt + 1}, waiting...")
                 time.sleep(retry_delay)  # Wait before retrying
             else:
-                print(f"Could not write to '{file_path}' after {max_retries} retries. File may be open in another program.")
+                print(f"Could not write to '{file_path}' after {max_retries} retries.")
                 break
         except Exception as e:
-            print(f"An unexpected error occurred while trying to log to '{file_path}': {str(e)}")
+            print(f"An unexpected error occurred while trying to log to '{file_path}': {e}")
             break
             
 def extract_problem_report(root_folder):
@@ -344,11 +353,14 @@ def save_xml_with_utf8_encoding(file_path):
 
 def create_list_of_files(startpath):
     """
-    Creates a summary of all files and folders in the directory into 'Process output/problemreport_files.csv'.
+    Creates a CSV file listing all files and folders in the directory.
+    Output is written to 'Process output/problemreport_files.csv'.
     """
     log_message(f"Creating a list of files in directory: {startpath}")
+    
+    # Define the output path for the file list
     output_folder = setup_output_folder(startpath)
-    file_path = os.path.join(output_folder, "problemreport_files.csv")
+    file_path = os.path.join(output_folder, PROBLEM_REPORT_FILE)
 
     with open(file_path, "w", newline="", encoding="utf-8") as csvfile:
         filewriter = csv.writer(csvfile, delimiter=";", quotechar="|", quoting=csv.QUOTE_MINIMAL)
@@ -363,16 +375,16 @@ def create_list_of_files(startpath):
 def extract_pipetting_steps(root_folder):
     """
     Executes the PipettorDataExtractorConsole.exe located in PipettorDataExtractor_Tool subfolder 
-    with configured parameters. Extracts pipetting steps into a CSV file in the 'Process output' folder.
+    with configured parameters. Outputs a CSV file to the 'Process output' folder.
     """
-    log_message("Starting pipetting steps extraction process...")
+    log_message("Starting pipetting steps extraction process.")
 
-    # Update the path to the executable in the subfolder PipettorDataExtractor_Tool
+    # Path to the PipettorDataExtractorConsole.exe
     exe_path = os.path.join(root_folder, "PipettorDataExtractor_Tool", "PipettorDataExtractorConsole.exe")
 
-    # Ensure the "Process output" folder exists and define CSV output path there
-    output_folder = setup_output_folder(root_folder)  # Create/confirm "Process output"
-    csv_file_path = os.path.join(output_folder, "testorders_pipetting_events.csv")
+    # Output file saved to 'Process output'
+    output_folder = setup_output_folder(root_folder)  # Create/confirm the output folder
+    csv_file_path = os.path.join(output_folder, PIPETTING_EVENTS_FILE)  # Define output CSV file path
     input_path = os.path.abspath(root_folder)  # Get absolute path for input folder
 
     # Construct the command as a LIST of arguments for subprocess.run
@@ -380,7 +392,7 @@ def extract_pipetting_steps(root_folder):
         exe_path,
         "-p",
         input_path,        # Input folder path
-        csv_file_path,     # Output CSV file path in 'Process output'
+        csv_file_path,     # Output CSV file in 'Process output'
         "true",            # Overwrite existing file flag
         "true",            # Extract all data flag
         "false"            # Additional flag
@@ -419,13 +431,13 @@ def analyze_ebarcodes_importer(root_folder):
     """
     log_message("Starting e-Barcodes importer analysis...")
 
-    # Define the relative path where the log files are located
-    relative_path = r"EventTraces\SystemSoftwareLog"
+    # Define the path where the log files are located
+    relative_path = r"EventTraces\SystemSoftwareLog8"
     log_dir = os.path.join(root_folder, relative_path)
 
-    # Create output folder inside "Process output"
+    # Define the output folder and summary file path
     output_folder = setup_output_folder(root_folder)
-    csv_summary_file = os.path.join(output_folder, "eBarcode_Importer_Summary.csv")
+    csv_summary_file = os.path.join(output_folder, EBARCODE_SUMMARY_FILE)
 
     # Ensure the log directory exists
     if not os.path.exists(log_dir):
@@ -494,12 +506,13 @@ def analyze_ebarcodes_importer(root_folder):
         log_message(f"Error while fetching log files: {e}")
         return
 
-    # Step 1: Extract auxiliary events
+    # Step 1: Extract auxiliary events to match with main log events
     auxiliary_events = extract_install_events(log_files)
 
-    # Step 2: Analyze log files and prepare rows for CSV
+    # Step 2: Analyze log files and generate rows for the CSV
     for file_name in log_files:
         file_path = os.path.join(log_dir, file_name)
+        log_message(f"Processing: {file_name}")
 
         try:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as log_file:
@@ -546,7 +559,13 @@ def analyze_ebarcodes_importer(root_folder):
     except Exception as e:
         log_message(f"Failed to write summary to '{csv_summary_file}': {e}")
 
+    if log_count == 0:
+        log_message("No relevant logs processed.")
+    else:
+        log_message(f"Finished processing files. Total relevant logs: {log_count}")
+
     log_message("e-Barcodes importer analysis completed.")
+
 
 def main():
     root_folder = os.getcwd()  # Automatically detect the current working directory.
