@@ -843,7 +843,92 @@ def find_utc_time(root_folder):
             log_message(f"Error processing file {xml_file}: {e}")
 
     log_message("No UTC offset found in any of the XML files.")    
-     
+
+def find_unhandled_exceptions(root_folder):
+    """
+    Searches for files matching the pattern 'Roche.C4C.ServiceHosting.BackEnd.log*'
+    in the folder 'EventTraces/SystemSoftwareLog'. Filters rows where the 'Thread'
+    column contains 'UnhandledExceptionEventThread' (case-insensitive), and writes
+    all such rows into 'UnhandledException.csv'.
+    """
+    log_message("==================================================")
+    log_message("Starting process to find unhandled exceptions...")
+
+    # Define the relative path and file pattern
+    relative_path = r"EventTraces\SystemSoftwareLog"
+    folder_path = os.path.join(root_folder, relative_path)
+    file_pattern = r"Roche.C4C.ServiceHosting.BackEnd.log*"
+
+    # Define the output CSV file
+    output_folder = setup_output_folder(root_folder)
+    unhandled_csv_path = os.path.join(output_folder, "UnhandledException.csv")
+
+    # Ensure the folder exists
+    if not os.path.exists(folder_path):
+        log_message(f"Error: Directory not found: {folder_path}")
+        return
+
+    # Find and sort files by modified date (descending)
+    log_files = sorted(
+        [os.path.join(folder_path, file) for file in os.listdir(folder_path) if fnmatch.fnmatch(file, file_pattern)],
+        key=lambda f: os.path.getmtime(f),
+        reverse=True,
+    )
+
+    log_message(f"Found {len(log_files)} log files matching the pattern '{file_pattern}'.")
+
+    if not log_files:
+        log_message(f"No log files matching pattern '{file_pattern}' found in: {folder_path}.")
+        return
+
+    # List to store rows for the new CSV
+    detected_rows = []
+
+    # Process each log file
+    for file_name in log_files:
+        log_message(f"Processing file: {file_name}")
+
+        try:
+            # Read the file content line by line
+            with open(file_name, "r", encoding="utf-8", errors="ignore") as file:
+                for i, line in enumerate(file):
+                    # Skip header row
+                    if i == 0 and line.startswith("Date<!>Thread<!>Level<!>Logger<!>Message<!>Exception<!>Correlation ID [EOL]"):
+                        continue
+                    
+                    # Split the row by <!>
+                    row_parts = line.strip().split("<!>")
+
+                    # Ensure the row has the correct number of fields (7 expected)
+                    if len(row_parts) < 7:
+                        log_message(f"Skipping malformed row (less than 7 fields) in file '{file_name}': {line.strip()}")
+                        continue
+
+                    # Check if "UnhandledExceptionEventThread" is in the 'Thread' field (case insensitive)
+                    thread_field = row_parts[1].strip()  # Index 1 corresponds to 'Thread'
+                    if "UnhandledExceptionEventThread".lower() in thread_field.lower():
+                        detected_rows.append(row_parts)  # Add the row to the detected list
+
+        except Exception as e:
+            log_message(f"Error processing file '{file_name}': {e}")
+
+    # Write the detected rows to the output CSV
+    try:
+        with open(unhandled_csv_path, mode="w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file, delimiter=";")
+            # Write header first
+            writer.writerow(["Date", "Thread", "Level", "Logger", "Message", "Exception", "Correlation ID [EOL]"])
+            # Write all detected rows
+            writer.writerows(detected_rows)
+
+        log_message(f"Unhandled exception rows saved to: {unhandled_csv_path}")
+        print(f"Unhandled exception rows saved to: {unhandled_csv_path}")
+    except Exception as e:
+        log_message(f"Error writing to CSV file '{unhandled_csv_path}': {e}")
+
+    # Log completion
+    log_message(f"Completed processing unhandled exceptions. Total rows detected: {len(detected_rows)}")
+
 def main():
     root_folder = os.getcwd()  # Automatically detect the current working directory.
     while True:
@@ -860,13 +945,14 @@ def main():
         print("---- SW analysis tools ----")
         print("[7] Analyze e-Barcodes importer")
         print("[8] Analyze software reboots")
-        print("[9] Find UTC Time")  # Moved here and updated to [9]
+        print("[9] Find UTC Time")
+        print("[10] Find Unhandled Exceptions")  # New option added
         
         print("---- HW analysis tools ----")
-        print("[10] Extract pipetting steps")
+        print("[11] Extract pipetting steps")
         
         print("---- Other tools ----")
-        print("[11] Split files in smaller parts")  # Updated to [11]
+        print("[12] Split files into smaller parts")
         
         print("[Q] Quit")
 
@@ -884,19 +970,19 @@ def main():
             log_message("==================================================")
         elif option == "2":
             log_message("==================================================")
-            extract_problem_report(root_folder)  # Option [2]
+            extract_problem_report(root_folder)
             log_message("==================================================")
         elif option == "3":
             log_message("==================================================")
-            extract_audits(root_folder)          # Option [3]
+            extract_audits(root_folder)
             log_message("==================================================")
         elif option == "4":
             log_message("==================================================")
-            extract_settings(root_folder)        # Option [4]
+            extract_settings(root_folder)
             log_message("==================================================")
         elif option == "5":
             log_message("==================================================")
-            create_list_of_files(root_folder)    # Option [5]
+            create_list_of_files(root_folder)
             log_message("==================================================")
         elif option == "6":
             log_message("==================================================")
@@ -907,31 +993,37 @@ def main():
         elif option == "7":
             log_message("==================================================")
             print("\nAnalyzing e-Barcodes importer...")
-            analyze_ebarcodes_importer(root_folder)  # Option [7]
+            analyze_ebarcodes_importer(root_folder)
             print("\ne-Barcodes importer analysis completed.")
             log_message("==================================================")
         elif option == "8":
             log_message("==================================================")
             print("\nAnalyzing software reboots...")
-            extract_reboot_information(root_folder)  # Option [8]
+            extract_reboot_information(root_folder)
             print("\nSoftware reboot analysis completed.")
             log_message("==================================================")
         elif option == "9":
             log_message("==================================================")
             print("\nFinding UTC Time...")
-            find_utc_time(root_folder)  # Option [9]
+            find_utc_time(root_folder)
             print("\nUTC time zone extraction completed.")
             log_message("==================================================")
         elif option == "10":
             log_message("==================================================")
-            print("\nExtracting pipetting steps...")
-            extract_pipetting_steps(root_folder)  # Option [10]
-            print("\nPipetting steps extraction completed.")
+            print("\nFinding Unhandled Exceptions...")
+            find_unhandled_exceptions(root_folder)
+            print("\nUnhandled exception processing completed.")
             log_message("==================================================")
         elif option == "11":
             log_message("==================================================")
+            print("\nExtracting pipetting steps...")
+            extract_pipetting_steps(root_folder)
+            print("\nPipetting steps extraction completed.")
+            log_message("==================================================")
+        elif option == "12":
+            log_message("==================================================")
             print("\nSplitting files into smaller parts...")
-            split_log_files_in_parts(root_folder)  # Option [11]
+            split_log_files_in_parts(root_folder)
             print("\nFile splitting completed.")
             log_message("==================================================")
         elif option == "q":
@@ -939,8 +1031,6 @@ def main():
             break
         else:
             print("Invalid option. Please try again.")
-
-
 
 if __name__ == "__main__":
     main()
