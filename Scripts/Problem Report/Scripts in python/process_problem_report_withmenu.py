@@ -1,3 +1,4 @@
+import sys
 import os
 import re
 import zipfile
@@ -8,10 +9,6 @@ import math
 import shutil
 import subprocess
 from datetime import datetime
-
-
-import time
-
 import time
 
 def log_message(message):
@@ -349,15 +346,15 @@ def create_list_of_files(startpath):
 
 def extract_pipetting_steps(root_folder):
     """
-    Executes the PipettorDataExtractorConsole.exe with configured parameters.
-    Extracts pipetting steps into a CSV file.
+    Executes the PipettorDataExtractorConsole.exe located in PipettorDataExtractor_Tool subfolder 
+    with configured parameters. Extracts pipetting steps into a CSV file.
     """
     log_message("Starting pipetting steps extraction process...")
 
-    # Ensure paths are valid and normalized
-    exe_path = os.path.join(root_folder, "PipettorDataExtractorConsole.exe")
+    # Update the path to the executable in the subfolder PipettorDataExtractor_Tool
+    exe_path = os.path.join(root_folder, "PipettorDataExtractor_Tool", "PipettorDataExtractorConsole.exe")
     csv_file_path = os.path.join(root_folder, "testorders_pipetting_events.csv")
-    input_path = os.path.abspath(root_folder)  # Get absolute path for input path
+    input_path = os.path.abspath(root_folder)  # Get absolute path for input folder
 
     # Construct the command as a LIST of arguments for subprocess.run
     command_list = [
@@ -392,12 +389,165 @@ def extract_pipetting_steps(root_folder):
             log_message(f"Command stderr:\n{result.stderr}")
 
     except FileNotFoundError:
-        log_message(f"Error: Could not find the executable at: {exe_path}. Ensure it exists in the root folder.")
+        log_message(f"Error: Could not find the executable at: {exe_path}. Ensure it exists in the PipettorDataExtractor_Tool subfolder.")
     except Exception as e:
         log_message(f"An unexpected error occurred while executing command {command_list}: {str(e)}")
 
 
 
+
+def analyze_ebarcodes_importer(root_folder):
+    """
+    Analyzes e-Barcodes Importer logs from backend log parts and generates a CSV summary.
+    """
+    log_message("Starting e-Barcodes importer analysis...")
+
+    # Define the relative path where the log files are located
+    relative_path = r"EventTraces\SystemSoftwareLog"
+    log_dir = os.path.join(root_folder, relative_path)
+
+    # Output file name
+    csv_summary_file = os.path.join(root_folder, "eBarcode Importer Summary.csv")
+
+    # Ensure the directory exists
+    if not os.path.exists(log_dir):
+        log_message(f"Error: Directory not found: {log_dir}")
+        return
+
+    log_message(f"Processing e-Barcodes logs from directory: {log_dir}")
+
+    # Trace summary storage
+    log_count = 0
+
+    # Define the logger to exclude
+    excluded_logger = ""  # Disabled exclusion for logger, as it’s commented in the original script
+
+    def sanitize_version(version):
+        """Ensure the version field contains only digits and periods (e.g., '8.2.101')."""
+        return re.sub(r"[^\d.]", "", version) if version else None
+
+    def extract_message_details(message):
+        """Extract MasterFileCategory, Version, and Code from the message."""
+        try:
+            # Split the message and extract details
+            parts = message.split(", ")
+            category = next(
+                (p.split(": ")[1].strip() for p in parts if "MasterFileCategory:" in p), None
+            )
+            version = next(
+                (p.split(": ")[1].strip() for p in parts if "Version:" in p), None
+            )
+            code = next((p.split(": ")[1].strip() for p in parts if "Code:" in p), None)
+            version = sanitize_version(version)  # Clean up the version string
+            if code and "..." in code:
+                code = code.replace("...", "").strip()  # Clean up ellipsis
+            return category, version, code
+        except Exception:
+            return None, None, None
+
+    def extract_install_events(files):
+        """Extract all lines with InstallProgressChangedEvent from all given files."""
+        install_events = []
+        for file_name in files:            
+            file_path = os.path.join(log_dir, file_name)
+            log_message(f"Processing install events: {file_name}")
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as file:
+                    for line in file:
+                        if "InstallProgressChangedEvent" in line:
+                            log_message(f"InstallProgressChangedEvent fond in file {file_name} and line {line}")
+                            install_events.append({"event": line.strip(), "file_name": file_name})  # Add matching lines to the list
+            except Exception as e:
+                log_message(f"DEBUG: Error extracting install events from file {file_path}: {e}")
+        return install_events
+
+    def find_install_event(version, code, auxiliary_events):
+        """Search the auxiliary data for an install event with matching version and code."""
+        for event in auxiliary_events:
+            if f'Code: "{code}"' in event["event"] and f'Version: "{version}"' in event["event"]:
+                return event["event"]  # Return the matched installation event
+        return None
+
+    # Step 1: Extract installation events from files
+    log_message("Extracting installation events from log files...")
+    try:
+        log_files = sorted(
+            (
+                f
+                for f in os.listdir(log_dir)
+                if f.startswith("Roche.C4C.ServiceHosting.BackEnd.log")
+            ),
+            key=lambda f: os.path.getctime(os.path.join(log_dir, f)),
+            reverse=True,
+        )
+        auxiliary_events = extract_install_events(log_files)
+    except Exception as e:
+        log_message(f"Error while processing the logs: {e}")
+        return
+
+    # Step 2: Process log files and generate eBarcode Importer Summary
+    processed_rows = []
+
+    for file_name in log_files:
+        file_path = os.path.join(log_dir, file_name)
+        log_message(f"Processing: {file_name}")
+
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as file:
+                for line_number, line in enumerate(file, start=1):
+                    # Split the line manually using the delimiter `<!>`
+                    parts = line.split("<!>")
+                    if len(parts) < 7:  # Skip incomplete lines
+                        continue
+
+                    timestamp = parts[0].strip()
+                    logger = parts[3].strip()
+                    message = parts[4].strip()
+
+                    # Skip the specified logger
+                    if logger == excluded_logger:
+                        continue
+
+                    if "Roche.C4C.RSA.BusinessLogic.PackageManagement.PackageImporting" in logger:
+                        # Extract MasterFileCategory, Version, and Code from the message
+                        master_file_category, version, code = extract_message_details(message)
+
+                        # Search for an installation event in the auxiliary data
+                        install_event = None
+                        if version and code:
+                            install_event = find_install_event(version, code, auxiliary_events)
+
+                        # Append the row information for CSV output in the specified order
+                        processed_rows.append([
+                            timestamp,
+                            master_file_category,
+                            version,
+                            code,
+                            message,
+                            install_event if install_event else "",
+                        ])
+                        log_count += 1
+        except Exception as e:
+            log_message(f"Error processing file {file_name}: {e}")
+
+    if log_count == 0:
+        log_message("No relevant logs processed.")
+    else:
+        log_message(f"Finished processing files. Total relevant logs: {log_count}")
+
+    # Write to CSV file
+    try:
+        with open(csv_summary_file, "w", encoding="utf-8", newline="") as csv_file:
+            writer = csv.writer(csv_file, delimiter=";")
+            # Write the header in the specified order
+            writer.writerow(["Timestamp", "MasterFileCategory", "Version", "Code", "Message", "Installation Event"])
+            # Write all processed rows
+            for row in processed_rows:
+                writer.writerow(row)
+
+        log_message(f"Final summary saved to: {csv_summary_file}")
+    except Exception as e:
+        log_message(f"Error writing to {csv_summary_file}: {e}")
 
 
 def main():
@@ -413,6 +563,7 @@ def main():
         print("[6] List files")
         print("[7] Run all in one [1]/[3]/[4]/[6]")
         print("[8] Extract pipetting steps")
+        print("[9] Analyze e-Barcodes importer")  # Newly added Option [9]
         print("[Q] Quit")
 
         # Wait for user input
@@ -441,11 +592,16 @@ def main():
             print("\nExtracting pipetting steps...")
             extract_pipetting_steps(root_folder)
             print("\nPipetting steps extraction completed.")
+        elif option == "9":
+            print("\nAnalyzing e-Barcodes importer...")
+            analyze_ebarcodes_importer(root_folder)  # Call the new method
+            print("\ne-Barcodes importer analysis completed.")
         elif option == "q":
             print("Exiting the program...")
             break
         else:
             print("Invalid option. Please try again.")
+
 
 if __name__ == "__main__":
     main()
